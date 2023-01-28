@@ -1,0 +1,20 @@
+{{define "base"}}
+<!doctype html>
+<html lang='en'>
+    <head>
+        <meta charset='utf-8'>
+        <title>{{template "title" .}}</title>
+    </head>
+    <body>
+        <header>
+            <h1><a href='/'>SurfShit</a></h1>
+        </header>
+        <nav>
+            <a href="/update">Обновление прогноза</a>
+        </nav>
+        <main>
+            {{template "main" .}}
+        </main>
+    </body>
+</html>
+{{ end }}

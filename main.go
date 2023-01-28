@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -18,6 +19,7 @@ import (
 type MeteoAPI interface {
 	GetMeteoData(start, stop string, client *resty.Client) ([]byte, error)
 	FormatReport(weather []byte) (formattedInfo string, err error)
+	ReportCount(weather []byte) (count int, err error)
 	SaveToFile(data []byte) error
 	LoadFromFile() (data []byte, err error)
 }
@@ -29,6 +31,7 @@ type MeteoAPIData struct {
 type MeteoController struct {
 	api    MeteoAPI
 	client resty.Client
+	cfg    Config
 }
 
 type Config struct {
@@ -86,12 +89,15 @@ func main() {
 	controller := &MeteoController{
 		api:    api,
 		client: *client,
+		cfg:    *cfg,
 	}
 
 	r := gin.Default()
+	r.LoadHTMLGlob("templates/*")
 
 	router := r.Group("/")
 	{
+		router.GET("/", controller.WeatherReport)
 		router.GET("/update", controller.UpdateWeatherReport)
 	}
 	r.Run(cfg.Address)
@@ -151,7 +157,23 @@ func (r *MeteoAPIData) FormatReport(weather []byte) (formattedInfo string, err e
 			info.Hours[k].SwellPeriod.Sg,
 		)
 	}
-	formattedInfo += fmt.Sprintf("Осталось запросов: %d", 10-info.Meta.RequestCount)
+	return
+}
+
+func (r *MeteoAPIData) ReportCount(weather []byte) (count int, err error) {
+	var info SurfInfo
+
+	err = json.Unmarshal(weather, &info)
+	if err != nil {
+		err = fmt.Errorf("error during unmarshalling %s", err)
+		return
+	}
+
+	count = 10 - info.Meta.RequestCount
+	if count < 0 {
+		err = fmt.Errorf("апи блокнулось, приходи завтра - будет еще 10 запросов к апи")
+		return
+	}
 	return
 }
 
@@ -165,11 +187,13 @@ func (r *MeteoAPIData) SaveToFile(data []byte) (err error) {
 	writer := bufio.NewWriter(file)
 
 	file.Truncate(0)
+
 	_, err = writer.Write(data)
 	if err != nil {
 		err = fmt.Errorf("error during writing %q", err)
 		return
 	}
+
 	return writer.Flush()
 
 }
@@ -183,16 +207,17 @@ func (r *MeteoAPIData) LoadFromFile() (data []byte, err error) {
 
 	reader := bufio.NewReader(file)
 
-	_, err = reader.Read(data)
+	data, err = io.ReadAll(reader)
 	if err != nil {
-		err = fmt.Errorf("error during reading: %s", err)
+		log.Printf("read err : %s", err)
 		return
 	}
+	log.Print(string(data))
 	return
 }
 
 func (contr *MeteoController) UpdateWeatherReport(ctx *gin.Context) {
-
+	var status string
 	start := fmt.Sprint(time.Now().UTC().Unix())
 	stop := fmt.Sprint(time.Now().Add(time.Hour * 168).Unix())
 
@@ -207,10 +232,34 @@ func (contr *MeteoController) UpdateWeatherReport(ctx *gin.Context) {
 		log.Printf("%s", err)
 	}
 
+	count, err := contr.api.ReportCount(weather)
+	if err != nil {
+		log.Printf("error during counting: %s", err)
+	}
+
+	if err != nil {
+		status = fmt.Sprintf("чота наебнулось: %s", err)
+	} else {
+		status = fmt.Sprintf("всё балдеж, иди на главную, кстати сегодня осталось всего %d обновлений", count)
+	}
+
+	ctx.HTML(http.StatusOK, "update.tmpl", gin.H{
+		"status": status,
+	})
+}
+
+func (contr *MeteoController) WeatherReport(ctx *gin.Context) {
+
+	weather, err := contr.api.LoadFromFile()
+	if err != nil {
+		log.Printf("error: %s", err)
+	}
+
 	report, err := contr.api.FormatReport(weather)
 	if err != nil {
 		log.Printf("%s", err)
 	}
 
 	ctx.String(http.StatusOK, report)
+
 }
